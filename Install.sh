@@ -51,8 +51,8 @@ info "安装 Termux 依赖（proot-distro / termux-api / curl / git）..."
 pkg install -y proot-distro termux-api curl git
 
 # 5. 安装 Debian 环境
-if [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO" ]; then
-    info "$DISTRO 环境已存在，跳过"
+if proot-distro list | awk '{print $1}' | grep -qx "$DISTRO"; then
+    info "$DISTRO 环境已存在，跳过安装"
 else
     info "安装 $DISTRO 环境（约几分钟）..."
     proot-distro install "$DISTRO"
