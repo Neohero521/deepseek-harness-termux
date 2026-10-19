@@ -35,8 +35,33 @@ echo "Node $(node -v)  npm $(npm -v)"
 echo "==> [3/5] 设置 npm 源（$NPM_REG）..."
 npm config set registry "$NPM_REG"
 
-echo "==> [4/5] 全局安装 @deepseek-ai/dsh（koffi 预编译版自动安装，不编译）..."
-npm install -g @deepseek-ai/dsh
+echo "==> [4/5] 升级 npm 并全局安装 @deepseek-ai/dsh ..."
+
+# Debian 自带 npm 9，其 cacache 在 proot 下有已知 rename/ENOENT 问题，
+# 先升级到新版 npm（Node >=20 兼容 npm 10/11）。
+npm install -g npm@latest --no-audit --no-fund 2>/dev/null || warn "npm 升级失败，继续使用现有版本"
+echo "npm $(npm -v)"
+
+# 安装 dsh；失败自动清缓存重试，第二次起切换官方源兜底。
+installed=0
+for attempt in 1 2 3; do
+    if npm install -g @deepseek-ai/dsh --no-audit --no-fund; then
+        installed=1
+        break
+    fi
+    warn "dsh 安装失败（第 $attempt 次），清理缓存后重试..."
+    npm cache clean --force 2>/dev/null || true
+    sleep 3
+    if [ "$attempt" = "1" ] && [ "$NPM_REG" != "https://registry.npmjs.org" ]; then
+        warn "切换到官方源重试..."
+        npm config set registry https://registry.npmjs.org
+    fi
+done
+
+if [ "$installed" != "1" ]; then
+    echo "==> [x] dsh 安装失败，请检查网络后重新运行：bash /root/setup-debian.sh"
+    exit 1
+fi
 
 echo "==> [5/5] 验证安装..."
 dsh --version
