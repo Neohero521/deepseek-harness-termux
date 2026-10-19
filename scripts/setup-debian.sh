@@ -40,27 +40,35 @@ echo "Node $(node -v)  npm $(npm -v)"
 echo "==> [3/5] 设置 npm 源（$NPM_REG）..."
 npm config set registry "$NPM_REG"
 
-echo "==> [4/5] 升级 npm 并全局安装 @deepseek-ai/dsh ..."
+echo "==> [4/5] 重建 npm 缓存并全局安装 @deepseek-ai/dsh ..."
+
+# 磁盘空间检查
+SPACE="$(df -h / | awk 'NR==2 {print $4}')"
+echo "当前可用空间：$SPACE（推荐 500MB 以上）"
+
+# proot 环境下 npm 的 cacache 缓存易半损坏（tmp->content-v2 rename ENOENT），
+# 直接重建缓存目录；不影响 /root/.npmrc 与全局 node_modules。
+rm -rf /root/.npm
 
 # Debian 自带 npm 9，其 cacache 在 proot 下有已知 rename/ENOENT 问题，
 # 先升级到新版 npm（Node >=20 兼容 npm 10/11）；升级本身若失败则清缓存重试一次。
 npm install -g npm@latest --no-audit --no-fund 2>/dev/null || {
     warn "npm 升级失败，清理缓存重试一次..."
-    npm cache clean --force 2>/dev/null || true
+    rm -rf /root/.npm
     sleep 2
     npm install -g npm@latest --no-audit --no-fund 2>/dev/null || warn "npm 仍升级失败，继续使用现有版本"
 }
 echo "npm $(npm -v)"
 
-# 安装 dsh；失败自动清缓存重试，第二次起切换官方源兜底。
+# 安装 dsh；失败自动重建缓存重试，第二次起切换官方源兜底。
 installed=0
 for attempt in 1 2 3; do
     if npm install -g @deepseek-ai/dsh --no-audit --no-fund; then
         installed=1
         break
     fi
-    warn "dsh 安装失败（第 $attempt 次），清理缓存后重试..."
-    npm cache clean --force 2>/dev/null || true
+    warn "dsh 安装失败（第 $attempt 次），重建缓存后重试..."
+    rm -rf /root/.npm
     sleep 3
     if [ "$attempt" = "1" ] && [ "$NPM_REG" != "https://registry.npmjs.org" ]; then
         warn "切换到官方源重试..."
