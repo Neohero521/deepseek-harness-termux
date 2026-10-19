@@ -40,41 +40,66 @@ echo "Node $(node -v)  npm $(npm -v)"
 echo "==> [3/5] 设置 npm 源（$NPM_REG）..."
 npm config set registry "$NPM_REG"
 
-echo "==> [4/5] 重建 npm 缓存并全局安装 @deepseek-ai/dsh ..."
+echo "==> [4/5] 安装 @deepseek-ai/dsh ..."
 
 # 磁盘空间检查
 SPACE="$(df -h / | awk 'NR==2 {print $4}')"
 echo "当前可用空间：$SPACE（推荐 500MB 以上）"
 
-# proot 环境下 npm 的 cacache 缓存易半损坏（tmp->content-v2 rename ENOENT），
-# 直接重建缓存目录；不影响 /root/.npmrc 与全局 node_modules。
+# proot 环境下 Debian 自带 npm 9 的 cacache 会反复报 ENOENT rename
+# （Invalid response body），且 npm 升级自身也走同一机制被卡死。
+# 因此依次尝试：pnpm（corepack）→ 手动解压 npm 11 → 原 npm 重试。
 rm -rf /root/.npm
-
-# Debian 自带 npm 9，其 cacache 在 proot 下有已知 rename/ENOENT 问题，
-# 先升级到新版 npm（Node >=20 兼容 npm 10/11）；升级本身若失败则清缓存重试一次。
-npm install -g npm@latest --no-audit --no-fund 2>/dev/null || {
-    warn "npm 升级失败，清理缓存重试一次..."
-    rm -rf /root/.npm
-    sleep 2
-    npm install -g npm@latest --no-audit --no-fund 2>/dev/null || warn "npm 仍升级失败，继续使用现有版本"
-}
-echo "npm $(npm -v)"
-
-# 安装 dsh；失败自动重建缓存重试，第二次起切换官方源兜底。
 installed=0
-for attempt in 1 2 3; do
-    if npm install -g @deepseek-ai/dsh --no-audit --no-fund; then
-        installed=1
-        break
+
+# 路径 1：pnpm —— corepack 随 Node 自带，下载与缓存不依赖 npm cacache
+if command -v corepack >/dev/null 2>&1; then
+    export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+    corepack enable 2>/dev/null || true
+    if command -v pnpm >/dev/null 2>&1; then
+        echo "尝试用 pnpm 安装（corepack 自带）..."
+        if pnpm add -g @deepseek-ai/dsh --strict-peer-dependencies=false; then
+            installed=1
+        else
+            warn "pnpm 安装失败，改用 npm 11"
+        fi
     fi
-    warn "dsh 安装失败（第 $attempt 次），重建缓存后重试..."
-    rm -rf /root/.npm
-    sleep 3
-    if [ "$attempt" = "1" ] && [ "$NPM_REG" != "https://registry.npmjs.org" ]; then
-        warn "切换到官方源重试..."
-        npm config set registry https://registry.npmjs.org
+fi
+
+# 路径 2：手动下载 npm 11 tarball 并解压替换（绕过 npm 自身的安装机制）
+if [ "$installed" != "1" ]; then
+    echo "尝试手动升级 npm 到 11.x..."
+    rm -rf /tmp/npm-fix && mkdir -p /tmp/npm-fix
+    REG="$NPM_REG"
+    if curl -fsSL "$REG/npm/-/npm-11.3.0.tgz" -o /tmp/npm-fix/npm.tgz \
+        && [ -s /tmp/npm-fix/npm.tgz ]; then
+        rm -rf /usr/local/lib/node_modules/npm
+        mkdir -p /usr/local/lib/node_modules/npm
+        tar -xzf /tmp/npm-fix/npm.tgz -C /usr/local/lib/node_modules/npm --strip-components=1
+        ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+        echo "npm 已升级为 $(npm -v)"
+        if npm install -g @deepseek-ai/dsh --no-audit --no-fund; then
+            installed=1
+        else
+            warn "npm 11 安装失败，重建缓存后用原 npm 再试"
+        fi
+    else
+        warn "npm tarball 下载失败（$REG）"
     fi
-done
+fi
+
+# 路径 3：原 npm 重建缓存重试
+if [ "$installed" != "1" ]; then
+    for attempt in 1 2; do
+        rm -rf /root/.npm
+        sleep 2
+        warn "dsh 安装失败（第 $attempt 次），重建缓存后重试..."
+        if npm install -g @deepseek-ai/dsh --no-audit --no-fund; then
+            installed=1
+            break
+        fi
+    done
+fi
 
 if [ "$installed" != "1" ]; then
     echo "==> [x] dsh 安装失败，请检查网络后重新运行：bash /root/setup-debian.sh"
