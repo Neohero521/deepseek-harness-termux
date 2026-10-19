@@ -38,11 +38,21 @@ is_termux() {
     [ -n "$PREFIX" ] && echo "$PREFIX" | grep -q "com.termux"
 }
 
-# proot 发行版是否已安装（注册表或目录任一命中即视为已安装）
-# 注意：proot-distro list 的输出可能走 stderr，必须 2>&1 保留，否则检测失败
+# proot 发行版是否已安装（注册表或 rootfs 目录任一命中即视为已安装）
+# 注意：proot-distro 5.x（Python 版）容器目录为 containers/，旧版为
+# installed-rootfs/；list 输出走 stderr 且仅在 rootfs 存在时列出。
 distro_installed() {
     proot-distro list 2>&1 | grep -qw "$DISTRO" \
-        || [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO" ]
+        || [ -d "$(distro_root)" ]
+}
+
+# 返回发行版 rootfs 目录（新版 containers/ 优先，兼容旧版 installed-rootfs/）
+distro_root() {
+    if [ -d "$PREFIX/var/lib/proot-distro/containers/$DISTRO/rootfs" ]; then
+        echo "$PREFIX/var/lib/proot-distro/containers/$DISTRO/rootfs"
+    else
+        echo "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO"
+    fi
 }
 
 # dsh 服务是否在运行（按 PID 文件 + 进程存活判断）

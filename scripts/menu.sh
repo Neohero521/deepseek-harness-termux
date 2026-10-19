@@ -68,8 +68,7 @@ while true; do
                 mirror_flag="--mirror"
             fi
             if distro_installed; then
-                cp "$SCRIPTS_DIR/setup-debian.sh" \
-                    "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO/root/setup-debian.sh"
+                cp "$SCRIPTS_DIR/setup-debian.sh" "$(distro_root)/root/setup-debian.sh"
                 proot-distro login "$DISTRO" -- bash /root/setup-debian.sh $mirror_flag
             else
                 error "未找到 $DISTRO 环境，请重新运行 Install.sh"

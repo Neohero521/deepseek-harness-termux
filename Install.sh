@@ -50,11 +50,18 @@ pkg update -y
 info "安装 Termux 依赖（proot-distro / termux-api / curl / git）..."
 pkg install -y proot-distro termux-api curl git
 
-# 5. 确保 Debian 环境存在（已注册或目录存在均视为已安装）
-# 注意：proot-distro list 的输出可能走 stderr，必须 2>&1 保留
+# 5. 确保 Debian 环境存在（注册表或 rootfs 目录任一命中即视为已安装）
+# 注意：proot-distro 5.x 容器目录为 containers/，旧版为 installed-rootfs/
+distro_root() {
+    if [ -d "$PREFIX/var/lib/proot-distro/containers/$DISTRO/rootfs" ]; then
+        echo "$PREFIX/var/lib/proot-distro/containers/$DISTRO/rootfs"
+    else
+        echo "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO"
+    fi
+}
 distro_exists() {
     proot-distro list 2>&1 | grep -qw "$DISTRO" \
-        || [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO" ]
+        || [ -d "$(distro_root)" ]
 }
 
 if distro_exists; then
@@ -89,7 +96,7 @@ fi
 
 # 6. 在 Debian 内安装 Node 与 dsh
 info "配置 Debian 内环境（Node.js + dsh）..."
-DEBIAN_ROOT="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO"
+DEBIAN_ROOT="$(distro_root)"
 cp "$REPO_DIR/scripts/setup-debian.sh" "$DEBIAN_ROOT/root/setup-debian.sh"
 proot-distro login "$DISTRO" -- bash /root/setup-debian.sh $mirror_flag
 
