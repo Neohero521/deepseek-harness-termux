@@ -51,8 +51,9 @@ info "安装 Termux 依赖（proot-distro / termux-api / curl / git）..."
 pkg install -y proot-distro termux-api curl git
 
 # 5. 确保 Debian 环境存在（已注册或目录存在均视为已安装）
+# 注意：proot-distro list 的输出可能走 stderr，必须 2>&1 保留
 distro_exists() {
-    proot-distro list 2>/dev/null | grep -qw "$DISTRO" \
+    proot-distro list 2>&1 | grep -qw "$DISTRO" \
         || [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO" ]
 }
 
@@ -70,12 +71,20 @@ else
     fi
 fi
 
-# 验证 Debian 可正常登录；若 rootfs 损坏，提示重置
+# 验证 Debian 可正常登录；若 rootfs 损坏（注册信息在但文件缺失），引导重置
 if ! proot-distro login "$DISTRO" -- true 2>/dev/null; then
-    error "$DISTRO 环境无法登录（可能之前安装中断导致损坏）"
-    warn "请执行 proot-distro reset $DISTRO 重置后，再重新运行本脚本："
-    echo "    proot-distro reset $DISTRO"
-    exit 1
+    warn "$DISTRO 注册信息存在但环境损坏（之前安装中断/清理遗留）"
+    read -r -p "现在重置 $DISTRO 并重新下载（约 200MB）？[Y/n] " do_reset
+    if [ "$do_reset" = "n" ] || [ "$do_reset" = "N" ]; then
+        error "请手动执行 proot-distro reset $DISTRO 后，再重新运行本脚本"
+        exit 1
+    fi
+    info "重置 $DISTRO 环境（重新下载安装，约几分钟）..."
+    proot-distro reset "$DISTRO"
+    if ! proot-distro login "$DISTRO" -- true 2>/dev/null; then
+        error "重置后仍无法登录 $DISTRO"
+        exit 1
+    fi
 fi
 
 # 6. 在 Debian 内安装 Node 与 dsh

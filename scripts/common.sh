@@ -39,8 +39,9 @@ is_termux() {
 }
 
 # proot 发行版是否已安装（注册表或目录任一命中即视为已安装）
+# 注意：proot-distro list 的输出可能走 stderr，必须 2>&1 保留，否则检测失败
 distro_installed() {
-    proot-distro list 2>/dev/null | grep -qw "$DISTRO" \
+    proot-distro list 2>&1 | grep -qw "$DISTRO" \
         || [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO" ]
 }
 
