@@ -1,8 +1,13 @@
 #!/bin/bash
 # setup-debian.sh —— 在 proot 的 Debian 环境内执行。
 #
-# 安装 Node.js（>= 20）与全局 @deepseek-ai/dsh。
+# 安装 Node.js 22（官方二进制，自带 npm 10）与全局 @deepseek-ai/dsh。
 # koffi 的 Linux/ARM64 预编译二进制会作为 npm 依赖自动安装，无需现场编译。
+#
+# 为什么不用 Debian apt 自带的 nodejs/npm：
+#   Debian 13 自带 npm 9.2，其 cacache 在 proot 下会反复报
+#   "Invalid response body ... ENOENT rename"，且 npm 升级自身也走同一
+#   缓存路径被卡死。改用官方 Node 22 二进制（自带 npm 10）后问题消失。
 #
 # 用法：
 #   bash setup-debian.sh            # 使用官方 npm 源
@@ -16,90 +21,61 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 info() { echo -e "${GREEN}[*]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 
+NODE_VER="22.19.0"
+
 USE_MIRROR="${1:-}"
 if [ "$USE_MIRROR" = "--mirror" ]; then
     NPM_REG="https://registry.npmmirror.com"
+    NODE_BASE="https://npmmirror.com/mirrors/node/v$NODE_VER"
 else
     NPM_REG="https://registry.npmjs.org"
+    NODE_BASE="https://nodejs.org/download/release/v$NODE_VER"
 fi
+
+# CPU 架构 -> Node 官方二进制架构名
+case "$(uname -m)" in
+    aarch64|arm64) ARCH="arm64" ;;
+    x86_64|amd64)  ARCH="x64" ;;
+    armv7l)        ARCH="armv7l" ;;
+    *)             ARCH="arm64" ;;
+esac
 
 echo "==> [1/5] 更新 apt 并安装基础包..."
 apt-get update
-apt-get install -y ca-certificates curl gnupg git
+apt-get install -y ca-certificates curl xz-utils tar gnupg git
 
-echo "==> [2/5] 安装 Node.js（优先使用 apt 源，Debian 13 自带 20.x/22.x）..."
-apt-get install -y nodejs npm || true
-NODE_MAJOR="$(node -v 2>/dev/null | sed 's/v\([0-9]*\).*/\1/' || echo 0)"
-if [ "$NODE_MAJOR" -lt 20 ]; then
-    echo "apt 源 Node 版本过低（当前 v$NODE_MAJOR），改用 NodeSource 安装 22.x..."
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-    apt-get install -y nodejs
+echo "==> [2/5] 安装 Node.js $NODE_VER（官方二进制，含 npm 10）..."
+if [ "$(node -v 2>/dev/null || true)" != "v$NODE_VER" ]; then
+    PKG="node-v$NODE_VER-linux-$ARCH.tar.xz"
+    echo "下载 $NODE_BASE/$PKG ..."
+    curl -fsSL --connect-timeout 15 --max-time 600 "$NODE_BASE/$PKG" -o /tmp/node.tar.xz
+    tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
+    rm -f /tmp/node.tar.xz
+    hash -r 2>/dev/null || true
 fi
 echo "Node $(node -v)  npm $(npm -v)"
 
 echo "==> [3/5] 设置 npm 源（$NPM_REG）..."
 npm config set registry "$NPM_REG"
 
-echo "==> [4/5] 安装 @deepseek-ai/dsh ..."
-
-# 磁盘空间检查
+echo "==> [4/5] 全局安装 @deepseek-ai/dsh ..."
 SPACE="$(df -h / | awk 'NR==2 {print $4}')"
 echo "当前可用空间：$SPACE（推荐 500MB 以上）"
-
-# proot 环境下 Debian 自带 npm 9 的 cacache 会反复报 ENOENT rename
-# （Invalid response body），且 npm 升级自身也走同一机制被卡死。
-# 因此依次尝试：pnpm（corepack）→ 手动解压 npm 11 → 原 npm 重试。
 rm -rf /root/.npm
 installed=0
-
-# 路径 1：pnpm —— corepack 随 Node 自带，下载与缓存不依赖 npm cacache
-if command -v corepack >/dev/null 2>&1; then
-    export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-    corepack enable 2>/dev/null || true
-    if command -v pnpm >/dev/null 2>&1; then
-        echo "尝试用 pnpm 安装（corepack 自带）..."
-        if pnpm add -g @deepseek-ai/dsh --strict-peer-dependencies=false; then
-            installed=1
-        else
-            warn "pnpm 安装失败，改用 npm 11"
-        fi
+for attempt in 1 2 3; do
+    if npm install -g @deepseek-ai/dsh --no-audit --no-fund; then
+        installed=1
+        break
     fi
-fi
-
-# 路径 2：手动下载 npm 11 tarball 并解压替换（绕过 npm 自身的安装机制）
-if [ "$installed" != "1" ]; then
-    echo "尝试手动升级 npm 到 11.x..."
-    rm -rf /tmp/npm-fix && mkdir -p /tmp/npm-fix
-    REG="$NPM_REG"
-    if curl -fsSL "$REG/npm/-/npm-11.3.0.tgz" -o /tmp/npm-fix/npm.tgz \
-        && [ -s /tmp/npm-fix/npm.tgz ]; then
-        rm -rf /usr/local/lib/node_modules/npm
-        mkdir -p /usr/local/lib/node_modules/npm
-        tar -xzf /tmp/npm-fix/npm.tgz -C /usr/local/lib/node_modules/npm --strip-components=1
-        ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
-        echo "npm 已升级为 $(npm -v)"
-        if npm install -g @deepseek-ai/dsh --no-audit --no-fund; then
-            installed=1
-        else
-            warn "npm 11 安装失败，重建缓存后用原 npm 再试"
-        fi
-    else
-        warn "npm tarball 下载失败（$REG）"
+    warn "dsh 安装失败（第 $attempt 次），重建缓存后重试..."
+    rm -rf /root/.npm
+    sleep 3
+    if [ "$attempt" = "1" ] && [ "$NPM_REG" != "https://registry.npmjs.org" ]; then
+        warn "切换到官方源重试..."
+        npm config set registry https://registry.npmjs.org
     fi
-fi
-
-# 路径 3：原 npm 重建缓存重试
-if [ "$installed" != "1" ]; then
-    for attempt in 1 2; do
-        rm -rf /root/.npm
-        sleep 2
-        warn "dsh 安装失败（第 $attempt 次），重建缓存后重试..."
-        if npm install -g @deepseek-ai/dsh --no-audit --no-fund; then
-            installed=1
-            break
-        fi
-    done
-fi
+done
 
 if [ "$installed" != "1" ]; then
     echo "==> [x] dsh 安装失败，请检查网络后重新运行：bash /root/setup-debian.sh"
