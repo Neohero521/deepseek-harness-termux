@@ -38,9 +38,10 @@ is_termux() {
     [ -n "$PREFIX" ] && echo "$PREFIX" | grep -q "com.termux"
 }
 
-# proot 发行版是否已安装（用 proot-distro 自己的注册表判断，比查目录可靠）
+# proot 发行版是否已安装（注册表或目录任一命中即视为已安装）
 distro_installed() {
-    proot-distro list 2>/dev/null | awk '{print $1}' | grep -qx "$DISTRO"
+    proot-distro list 2>/dev/null | grep -qw "$DISTRO" \
+        || [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO" ]
 }
 
 # dsh 服务是否在运行（按 PID 文件 + 进程存活判断）

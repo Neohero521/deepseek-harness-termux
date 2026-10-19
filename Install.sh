@@ -50,12 +50,32 @@ pkg update -y
 info "安装 Termux 依赖（proot-distro / termux-api / curl / git）..."
 pkg install -y proot-distro termux-api curl git
 
-# 5. 安装 Debian 环境
-if proot-distro list | awk '{print $1}' | grep -qx "$DISTRO"; then
+# 5. 确保 Debian 环境存在（已注册或目录存在均视为已安装）
+distro_exists() {
+    proot-distro list 2>/dev/null | grep -qw "$DISTRO" \
+        || [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO" ]
+}
+
+if distro_exists; then
     info "$DISTRO 环境已存在，跳过安装"
 else
     info "安装 $DISTRO 环境（约几分钟）..."
-    proot-distro install "$DISTRO"
+    if ! proot-distro install "$DISTRO"; then
+        if distro_exists; then
+            info "检测到 $DISTRO 已注册（安装命令报错但环境可用），继续"
+        else
+            error "Debian 环境安装失败"
+            exit 1
+        fi
+    fi
+fi
+
+# 验证 Debian 可正常登录；若 rootfs 损坏，提示重置
+if ! proot-distro login "$DISTRO" -- true 2>/dev/null; then
+    error "$DISTRO 环境无法登录（可能之前安装中断导致损坏）"
+    warn "请执行 proot-distro reset $DISTRO 重置后，再重新运行本脚本："
+    echo "    proot-distro reset $DISTRO"
+    exit 1
 fi
 
 # 6. 在 Debian 内安装 Node 与 dsh
